@@ -1,0 +1,422 @@
+name: Build and Release Memcached Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      memcached_ref:
+        description: "Memcached branch, tag, or commit SHA to build (leave empty for latest upstream release)"
+        required: false
+        default: ""
+        type: string
+      build_type:
+        description: "CMake build configuration type"
+        required: false
+        default: "Release"
+        type: choice
+        options:
+          - Release
+          - RelWithDebInfo
+          - Debug
+      enable_extstore:
+        description: "Enable external storage engine (EXTSTORE)"
+        required: false
+        default: true
+        type: boolean
+      enable_tls:
+        description: "Enable TLS support via OpenSSL"
+        required: false
+        default: false
+        type: boolean
+      enable_sasl:
+        description: "Enable SASL authentication"
+        required: false
+        default: false
+        type: boolean
+      enable_proxy:
+        description: "Enable proxy functionality with Lua"
+        required: false
+        default: false
+        type: boolean
+      run_tests:
+        description: "Run CTest and E2E smoke tests"
+        required: false
+        default: true
+        type: boolean
+      publish_release:
+        description: "Publish GitHub Release (if false, only build and upload workflow artifacts)"
+        required: false
+        default: true
+        type: boolean
+  schedule:
+    - cron: "0 0 * * 0" # Weekly check for new upstream releases
+  push:
+    tags:
+      - "v*"
+      - "[0-9]+.*"
+      - "*unstable*"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.determine-ref.outputs.ref }}
+      version: ${{ steps.determine-ref.outputs.version }}
+      tag: ${{ steps.determine-ref.outputs.tag }}
+      release_name: ${{ steps.determine-ref.outputs.release_name }}
+      prerelease: ${{ steps.determine-ref.outputs.prerelease }}
+      should_run: ${{ steps.determine-ref.outputs.should_run }}
+      build_type: ${{ steps.determine-ref.outputs.build_type }}
+      enable_extstore: ${{ steps.determine-ref.outputs.enable_extstore }}
+      enable_tls: ${{ steps.determine-ref.outputs.enable_tls }}
+      enable_sasl: ${{ steps.determine-ref.outputs.enable_sasl }}
+      enable_proxy: ${{ steps.determine-ref.outputs.enable_proxy }}
+      run_tests: ${{ steps.determine-ref.outputs.run_tests }}
+      publish_release: ${{ steps.determine-ref.outputs.publish_release }}
+    steps:
+      - name: Determine Memcached Parameters
+        id: determine-ref
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const inputs = (context.payload && context.payload.inputs) || {};
+            const buildType = inputs.build_type || "Release";
+            const enableExtstore = inputs.enable_extstore !== undefined ? String(inputs.enable_extstore) : "true";
+            const enableTls = inputs.enable_tls !== undefined ? String(inputs.enable_tls) : "false";
+            const enableSasl = inputs.enable_sasl !== undefined ? String(inputs.enable_sasl) : "false";
+            const enableProxy = inputs.enable_proxy !== undefined ? String(inputs.enable_proxy) : "false";
+            const runTests = inputs.run_tests !== undefined ? String(inputs.run_tests) : "true";
+            const publishRelease = inputs.publish_release !== undefined ? String(inputs.publish_release) : "true";
+
+            async function fetchLatestUpstreamTag() {
+              try {
+                const release = await github.rest.repos.getLatestRelease({
+                  owner: "memcached",
+                  repo: "memcached"
+                });
+                if (release && release.data && release.data.tag_name) {
+                  return release.data.tag_name;
+                }
+              } catch (e) {
+                console.log(`getLatestRelease note: ${e.message}`);
+              }
+
+              console.log("Fetching upstream tags to determine latest semver tag...");
+              const tags = await github.rest.repos.listTags({
+                owner: "memcached",
+                repo: "memcached",
+                per_page: 50
+              });
+              const semverTags = tags.data
+                .map(t => t.name)
+                .filter(n => /^v?[0-9]+\.[0-9]+(\.[0-9]+)?$/.test(n));
+              if (semverTags.length > 0) {
+                return semverTags[0];
+              }
+              return null;
+            }
+
+            function parseRef(rawRef) {
+              const ref = rawRef.trim();
+              const date = new Date().toISOString().split("T")[0];
+              const timestamp = new Date().getTime();
+
+              const isSha = /^[0-9a-f]{7,40}$/i.test(ref);
+              const isSemver = /^v?[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9_.]+)?$/.test(ref);
+
+              let tagName = "";
+              let releaseName = "";
+              let version = "";
+              let prerelease = false;
+
+              if (isSha) {
+                const shortSha = ref.substring(0, 7);
+                tagName = `sha-${shortSha}-${date}-${timestamp}`;
+                releaseName = `Memcached sha-${shortSha} (${date}) for Windows`;
+                version = shortSha;
+                prerelease = true;
+              } else if (isSemver) {
+                tagName = ref.startsWith("v") ? ref : `v${ref}`;
+                const displayVer = ref.startsWith("v") ? ref.substring(1) : ref;
+                releaseName = `Memcached ${displayVer} for Windows`;
+                version = displayVer;
+                prerelease = /rc|alpha|beta|preview|dev/i.test(ref);
+              } else {
+                tagName = `${ref}-${date}-${timestamp}`;
+                releaseName = `Memcached ${ref} (${date}) for Windows`;
+                version = `${ref}-${date}`;
+                prerelease = true;
+              }
+
+              return { ref, tagName, releaseName, version, prerelease };
+            }
+
+            let targetRef = (inputs.memcached_ref || "").trim();
+            let shouldRun = true;
+
+            if (context.eventName === "schedule" || (context.eventName === "workflow_dispatch" && !targetRef)) {
+              console.log("No specific ref provided; querying latest upstream Memcached release...");
+              const latestTag = await fetchLatestUpstreamTag();
+              if (!latestTag) {
+                throw new Error("Unable to determine latest upstream Memcached tag.");
+              }
+              targetRef = latestTag;
+
+              if (context.eventName === "schedule") {
+                const targetTag = targetRef.startsWith("v") ? targetRef : `v${targetRef}`;
+                try {
+                  await github.rest.repos.getReleaseByTag({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    tag: targetTag
+                  });
+                  console.log(`Release ${targetTag} already exists in ${context.repo.owner}/${context.repo.repo}. Skipping.`);
+                  shouldRun = false;
+                } catch (e) {
+                  if (e.status === 404) {
+                    console.log(`Release ${targetTag} does not exist yet. Proceeding with build.`);
+                  } else {
+                    throw e;
+                  }
+                }
+              }
+            } else if (context.eventName === "push") {
+              targetRef = context.ref.replace("refs/tags/", "");
+            }
+
+            const parsed = parseRef(targetRef);
+
+            console.log("Determined build parameters:", {
+              ref: parsed.ref,
+              version: parsed.version,
+              tag: parsed.tagName,
+              release_name: parsed.releaseName,
+              prerelease: parsed.prerelease,
+              should_run: shouldRun,
+              build_type: buildType
+            });
+
+            core.setOutput("ref", parsed.ref);
+            core.setOutput("version", parsed.version);
+            core.setOutput("tag", parsed.tagName);
+            core.setOutput("release_name", parsed.releaseName);
+            core.setOutput("prerelease", parsed.prerelease.toString());
+            core.setOutput("should_run", shouldRun.toString());
+            core.setOutput("build_type", buildType);
+            core.setOutput("enable_extstore", enableExtstore);
+            core.setOutput("enable_tls", enableTls);
+            core.setOutput("enable_sasl", enableSasl);
+            core.setOutput("enable_proxy", enableProxy);
+            core.setOutput("run_tests", runTests);
+            core.setOutput("publish_release", publishRelease);
+
+  build-and-release:
+    needs: prepare
+    if: needs.prepare.outputs.should_run == 'true'
+    runs-on: windows-latest
+    env:
+      BUILD_TYPE: ${{ needs.prepare.outputs.build_type }}
+      BUILD_DIR: build_msvc
+    steps:
+      - name: Checkout Build Scripts
+        uses: actions/checkout@v4
+        with:
+          path: build-repo
+
+      - name: Checkout Memcached
+        uses: actions/checkout@v4
+        with:
+          repository: memcached/memcached
+          ref: ${{ needs.prepare.outputs.ref }}
+          path: memcached
+
+      - name: Checkout auto-win-msvc
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/auto-win-msvc
+          path: auto-win-msvc
+        continue-on-error: true
+
+      - name: Apply Overlay
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse -Force build-repo\overlay\* memcached
+
+      - name: Prepare Windows Service Wrapper
+        working-directory: memcached
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/winsw/winsw/releases/download/v3.0.0-alpha.11/WinSW-x64.exe" -OutFile "memcached-service.exe"
+          Copy-Item "..\build-repo\packaging\memcached-service.xml" -Destination "memcached-service.xml"
+
+      - name: Install NSIS
+        run: choco install nsis -y
+
+      - name: Configure CMake
+        working-directory: memcached
+        shell: pwsh
+        run: |
+          $buildTesting = if ('${{ needs.prepare.outputs.run_tests }}' -eq 'true') { 'ON' } else { 'OFF' }
+          $extstore = if ('${{ needs.prepare.outputs.enable_extstore }}' -eq 'true') { 'ON' } else { 'OFF' }
+          $tls = if ('${{ needs.prepare.outputs.enable_tls }}' -eq 'true') { 'ON' } else { 'OFF' }
+          $sasl = if ('${{ needs.prepare.outputs.enable_sasl }}' -eq 'true') { 'ON' } else { 'OFF' }
+          $proxy = if ('${{ needs.prepare.outputs.enable_proxy }}' -eq 'true') { 'ON' } else { 'OFF' }
+
+          $cmakeArgs = @(
+              "-S", ".",
+              "-B", "$env:BUILD_DIR",
+              "-G", "Visual Studio 17 2022",
+              "-A", "x64",
+              "-DCMAKE_BUILD_TYPE=$env:BUILD_TYPE",
+              "-DMEMCACHED_VERSION=${{ needs.prepare.outputs.version }}",
+              "-DBUILD_TESTING=$buildTesting",
+              "-DENABLE_EXTSTORE=$extstore",
+              "-DENABLE_TLS=$tls",
+              "-DENABLE_SASL=$sasl",
+              "-DENABLE_PROXY=$proxy"
+          )
+
+          Write-Host "Configuring CMake with arguments: $cmakeArgs"
+          cmake @cmakeArgs
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "CMake configuration failed."
+              exit 1
+          }
+
+      - name: Build Memcached
+        working-directory: memcached
+        run: cmake --build ${{ env.BUILD_DIR }} --config ${{ env.BUILD_TYPE }}
+
+      - name: Run CTest Suite
+        if: needs.prepare.outputs.run_tests == 'true'
+        working-directory: memcached/${{ env.BUILD_DIR }}
+        run: ctest -C ${{ env.BUILD_TYPE }} --output-on-failure -E testapp
+        continue-on-error: true
+
+      - name: E2E Smoke Testing
+        if: needs.prepare.outputs.run_tests == 'true'
+        working-directory: memcached
+        shell: pwsh
+        run: |
+          $cfg = "$env:BUILD_TYPE"
+          $candidates = @(
+              "$env:BUILD_DIR\bin\$cfg\memcached.exe",
+              "$env:BUILD_DIR\$cfg\memcached.exe",
+              "$env:BUILD_DIR\bin\memcached.exe",
+              "$env:BUILD_DIR\memcached.exe"
+          )
+
+          $exe = $null
+          foreach ($cand in $candidates) {
+              if (Test-Path $cand) {
+                  $exe = $cand
+                  break
+              }
+          }
+
+          if (-not $exe) {
+              Write-Error "memcached.exe not found in expected paths: $($candidates -join ', ')"
+              exit 1
+          }
+          Write-Host "Found Memcached executable at: $exe"
+
+          Write-Host "Starting Memcached on port 11211..."
+          $proc = Start-Process -FilePath $exe -ArgumentList "-p 11211" -PassThru
+          Start-Sleep -Seconds 2
+
+          try {
+              $client = New-Object System.Net.Sockets.TcpClient("127.0.0.1", 11211)
+              $stream = $client.GetStream()
+              $writer = New-Object System.IO.StreamWriter($stream)
+              $reader = New-Object System.IO.StreamReader($stream)
+              $writer.AutoFlush = $true
+
+              $writer.WriteLine("version")
+              $version = $reader.ReadLine()
+              Write-Host "Version response: $version"
+
+              $writer.WriteLine("set smokekey 0 0 5`r`nhello`r`n")
+              $setResp = $reader.ReadLine()
+              Write-Host "Set response: $setResp"
+
+              $writer.WriteLine("get smokekey")
+              $line1 = $reader.ReadLine()
+              $line2 = $reader.ReadLine()
+              $line3 = $reader.ReadLine()
+              Write-Host "Get response: $line1, $line2, $line3"
+
+              $writer.WriteLine("quit")
+              $client.Close()
+
+              if ($setResp -ne "STORED" -or $line2 -ne "hello") {
+                  Write-Error "Smoke test failed: unexpected response"
+                  exit 1
+              }
+              Write-Host "E2E smoke test passed!"
+          } finally {
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Package with CPack
+        working-directory: memcached/${{ env.BUILD_DIR }}
+        run: |
+          cpack -G WIX -C ${{ env.BUILD_TYPE }}
+          cpack -G NSIS -C ${{ env.BUILD_TYPE }}
+          cpack -G ZIP -C ${{ env.BUILD_TYPE }}
+
+      - name: Prepare Versioned Artifacts
+        working-directory: memcached
+        shell: pwsh
+        run: |
+          $ver = "${{ needs.prepare.outputs.version }}"
+          $cfg = "$env:BUILD_TYPE"
+          $distDir = "dist"
+          New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+
+          # Copy CPack generated installer archives/packages
+          Get-ChildItem -Path "$env:BUILD_DIR" -Include "Memcached-*.msi","Memcached-*.exe","Memcached-*.zip" -Recurse | ForEach-Object {
+              Copy-Item $_.FullName -Destination $distDir -Force
+              Write-Host "Collected package: $($_.Name)"
+          }
+
+          # Locate memcached.exe and c_test_runner.exe
+          $memcachedExe = Get-ChildItem -Path "$env:BUILD_DIR" -Filter "memcached.exe" -Recurse | Select-Object -First 1
+          $testRunnerExe = Get-ChildItem -Path "$env:BUILD_DIR" -Filter "c_test_runner.exe" -Recurse | Select-Object -First 1
+
+          if ($memcachedExe) {
+              # Standalone binary unversioned and versioned copies
+              Copy-Item $memcachedExe.FullName -Destination "$distDir\memcached.exe" -Force
+              Copy-Item $memcachedExe.FullName -Destination "$distDir\memcached-$ver-win64.exe" -Force
+              Write-Host "Prepared versioned standalone binary: memcached-$ver-win64.exe"
+          } else {
+              Write-Error "memcached.exe not found to stage for artifacts"
+              exit 1
+          }
+
+          if ($testRunnerExe) {
+              Copy-Item $testRunnerExe.FullName -Destination "$distDir\c_test_runner.exe" -Force
+              Copy-Item $testRunnerExe.FullName -Destination "$distDir\c_test_runner-$ver-win64.exe" -Force
+              Write-Host "Prepared versioned test runner: c_test_runner-$ver-win64.exe"
+          }
+
+          Write-Host "Contents of $distDir:"
+          Get-ChildItem -Path $distDir | Format-Table Name, Length
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Memcached-Windows-${{ needs.prepare.outputs.tag }}-${{ env.BUILD_TYPE }}
+          path: memcached/dist/*
+
+      - name: Create GitHub Release
+        if: needs.prepare.outputs.publish_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.release_name }}
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          files: memcached/dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

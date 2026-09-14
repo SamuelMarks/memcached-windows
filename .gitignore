@@ -1,0 +1,172 @@
+# ==============================================================================
+# Git Ignore for Memcached Windows (MSVC & CMake)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Fetched & External Source Repositories
+# ------------------------------------------------------------------------------
+auto-win-msvc/
+memcached/
+src/
+extern/
+external/
+subprojects/
+
+# ------------------------------------------------------------------------------
+# Build Outputs & Work Directories
+# ------------------------------------------------------------------------------
+build/
+build*/
+build_*/
+build-*/
+_build/
+out/
+bin/
+lib/
+dist/
+CMakeFiles/
+CMakeScripts/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+compile_commands.json
+Testing/
+
+# ------------------------------------------------------------------------------
+# CPack & Packaging Outputs
+# ------------------------------------------------------------------------------
+_CPack_Packages/
+*.msi
+*.msm
+*.msp
+*.exe
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tar.xz
+
+# WiX & NSIS intermediate files
+*.wixobj
+*.wixpdb
+*.nsi.install
+
+# ------------------------------------------------------------------------------
+# Compiled Binaries, Objects & Libraries
+# ------------------------------------------------------------------------------
+*.o
+*.obj
+*.lib
+*.a
+*.dll
+*.dylib
+*.so
+*.so.*
+*.exp
+*.def
+*.ilk
+*.pdb
+*.idb
+*.pch
+*.gch
+
+# ------------------------------------------------------------------------------
+# Microsoft Visual Studio / MSVC Artifacts
+# ------------------------------------------------------------------------------
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.vcxproj.idb
+*.suo
+*.user
+*.userosv
+*.opensdf
+*.sdf
+*.ipch
+*.VC.db
+*.VC.opendb
+$tf/
+*.tlog
+msbuild.log
+msbuild.err
+
+# ------------------------------------------------------------------------------
+# Python Artifacts & Environments
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+.eggs/
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ------------------------------------------------------------------------------
+# Pre-commit, Linters & Quality Tools
+# ------------------------------------------------------------------------------
+.pre-commit-cache/
+
+# ------------------------------------------------------------------------------
+# Logs, Temp Files & Core Dumps
+# ------------------------------------------------------------------------------
+test_output.txt
+*.log
+*.tmp
+*.temp
+*.bak
+*~
+*.swp
+*.swo
+core
+core.*
+
+# ------------------------------------------------------------------------------
+# IDEs and Editors
+# ------------------------------------------------------------------------------
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.project
+.cproject
+.settings/
+.claude/
+
+# ------------------------------------------------------------------------------
+# Operating System Artifacts
+# ------------------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+desktop.ini
+$RECYCLE.BIN/

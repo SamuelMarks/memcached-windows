@@ -12,9 +12,23 @@ endif()
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "Embedded")
 
+# Upstream Memcached Source Location
+if(NOT DEFINED MEMCACHED_SOURCE_DIR)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/memcached/items.c")
+        set(MEMCACHED_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/memcached")
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../memcached/items.c")
+        set(MEMCACHED_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../memcached")
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/items.c")
+        set(MEMCACHED_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    else()
+        set(MEMCACHED_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/memcached")
+    endif()
+endif()
+get_filename_component(MEMCACHED_SOURCE_DIR "${MEMCACHED_SOURCE_DIR}" ABSOLUTE)
+
 if(NOT DEFINED MEMCACHED_VERSION)
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/version.num")
-        file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version.num" FILE_VERSION LIMIT_COUNT 1)
+    if(EXISTS "${MEMCACHED_SOURCE_DIR}/version.num")
+        file(STRINGS "${MEMCACHED_SOURCE_DIR}/version.num" FILE_VERSION LIMIT_COUNT 1)
         string(STRIP "${FILE_VERSION}" FILE_VERSION)
         if(FILE_VERSION MATCHES "^[0-9]")
             set(MEMCACHED_VERSION "${FILE_VERSION}")
@@ -26,13 +40,32 @@ if(NOT DEFINED MEMCACHED_VERSION OR "${MEMCACHED_VERSION}" STREQUAL "")
     set(MEMCACHED_VERSION "1.6.45")
 endif()
 
+# Fallback to FetchContent if pristine upstream source tree is not present locally
+if(NOT EXISTS "${MEMCACHED_SOURCE_DIR}/items.c")
+    include(FetchContent)
+    FetchContent_Declare(
+        upstream_memcached
+        GIT_REPOSITORY https://github.com/memcached/memcached.git
+        GIT_TAG ${MEMCACHED_VERSION}
+    )
+    FetchContent_MakeAvailable(upstream_memcached)
+    set(MEMCACHED_SOURCE_DIR "${upstream_memcached_SOURCE_DIR}")
+endif()
+
 # Clean version for CMake project() command (numeric: X.Y.Z)
-string(REGEX MATCH "^([0-9]+\\.[0-9]+(\\.[0-9]+)?)" CMAKE_PROJ_VER "${MEMCACHED_VERSION}")
+string(REGEX MATCH "^([0-9]+\.[0-9]+(\.[0-9]+)?)" CMAKE_PROJ_VER "${MEMCACHED_VERSION}")
 if(NOT CMAKE_PROJ_VER)
     set(CMAKE_PROJ_VER "1.6.45")
 endif()
 
-project(memcached VERSION ${CMAKE_PROJ_VER} LANGUAGES C)
+project(memcached-windows VERSION ${CMAKE_PROJ_VER} LANGUAGES C)
+
+if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin|Linux" AND (WIN32 OR MSVC) AND NOT CMAKE_CROSSCOMPILING_EMULATOR)
+    find_program(WINE_PROGRAM wine)
+    if(WINE_PROGRAM)
+        set(CMAKE_CROSSCOMPILING_EMULATOR "${WINE_PROGRAM}" CACHE STRING "Cross-compiling emulator" FORCE)
+    endif()
+endif()
 
 if(MSVC)
     string(REPLACE "/Zi" "/Z7" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
@@ -78,48 +111,7 @@ if(WIN32 OR MSVC)
         GIT_REPOSITORY https://github.com/SamuelMarks/auto-win-msvc.git
         GIT_TAG master
     )
-    FetchContent_GetProperties(auto-win-msvc)
-    if(NOT auto-win-msvc_POPULATED)
-        FetchContent_Populate(auto-win-msvc)
-    endif()
-
-    if(EXISTS "${auto-win-msvc_SOURCE_DIR}/linux-epoll" AND NOT EXISTS "${auto-win-msvc_SOURCE_DIR}/linux-epoll/patch_wepoll.cmake")
-        file(WRITE "${auto-win-msvc_SOURCE_DIR}/linux-epoll/patch_wepoll.cmake"
-"if(DEFINED WEPOLL_SOURCE_DIR AND EXISTS \"\${WEPOLL_SOURCE_DIR}/wepoll.c\")
-    set(_wepoll_file \"\${WEPOLL_SOURCE_DIR}/wepoll.c\")
-elseif(EXISTS \"\${CMAKE_CURRENT_LIST_DIR}/wepoll.c\")
-    set(_wepoll_file \"\${CMAKE_CURRENT_LIST_DIR}/wepoll.c\")
-elseif(EXISTS \"wepoll.c\")
-    set(_wepoll_file \"wepoll.c\")
-endif()
-
-if(DEFINED _wepoll_file AND EXISTS \"\${_wepoll_file}\")
-    file(READ \"\${_wepoll_file}\" _content)
-    string(REPLACE \"typedef void* nt__fn_ptr_cast_t;\" \"typedef void (*nt__fn_ptr_cast_t)(void);\" _content \"\${_content}\")
-    string(REPLACE \"typedef struct tree {\" \"struct tree {\" _content \"\${_content}\")
-    string(REPLACE \"typedef struct tree_node {\" \"struct tree_node {\" _content \"\${_content}\")
-    string(REPLACE \"typedef struct ts_tree_node {\" \"struct ts_tree_node {\" _content \"\${_content}\")
-    string(REPLACE \"typedef struct queue_node {\" \"struct queue_node {\" _content \"\${_content}\")
-    string(REPLACE \"typedef struct queue {\" \"struct queue {\" _content \"\${_content}\")
-    string(REPLACE \"typedef struct poll_group {\" \"struct poll_group {\" _content \"\${_content}\")
-    string(REPLACE \"typedef struct port_state {\" \"struct port_state {\" _content \"\${_content}\")
-    string(REPLACE \"typedef struct sock_state {\" \"struct sock_state {\" _content \"\${_content}\")
-    string(REPLACE \"} tree_t;\" \"};\" _content \"\${_content}\")
-    string(REPLACE \"} tree_node_t;\" \"};\" _content \"\${_content}\")
-    string(REPLACE \"} ts_tree_node_t;\" \"};\" _content \"\${_content}\")
-    string(REPLACE \"} queue_node_t;\" \"};\" _content \"\${_content}\")
-    string(REPLACE \"} queue_t;\" \"};\" _content \"\${_content}\")
-    string(REPLACE \"} poll_group_t;\" \"};\" _content \"\${_content}\")
-    string(REPLACE \"} port_state_t;\" \"};\" _content \"\${_content}\")
-    string(REPLACE \"} sock_state_t;\" \"};\" _content \"\${_content}\")
-    file(WRITE \"\${_wepoll_file}\" \"\${_content}\")
-endif()
-")
-    endif()
-
-    if(NOT TARGET auto-win-msvc)
-        add_subdirectory(${auto-win-msvc_SOURCE_DIR} ${auto-win-msvc_BINARY_DIR} EXCLUDE_FROM_ALL)
-    endif()
+    FetchContent_MakeAvailable(auto-win-msvc)
 else()
     add_library(auto-win-msvc INTERFACE)
 endif()
@@ -162,7 +154,7 @@ if(NOT TARGET libevent::extra)
     endif()
 endif()
 
-#Generate config.h
+# Generate config.h
 set(CONFIG_H_CONTENT [=[/* Generated by CMake for memcached */
 #ifndef CONFIG_H
 #define CONFIG_H
@@ -183,9 +175,7 @@ set(CONFIG_H_CONTENT [=[/* Generated by CMake for memcached */
 #define PACKAGE_VERSION "@MEMCACHED_VERSION@"
 #define VERSION "@MEMCACHED_VERSION@"
 #define HAVE_LIBEVENT_NEW 1
-#if defined(_WIN32) || defined(_MSC_VER) || defined(__APPLE__)
 #define HAVE_HTONLL 1
-#endif
 #define NEED_ALIGN 1
 #define SIZEOF_VOID_P ]=])
 
@@ -236,69 +226,81 @@ string(APPEND CONFIG_H_CONTENT "
 string(CONFIGURE "${CONFIG_H_CONTENT}" CONFIG_H_CONTENT @ONLY)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/config.h" "${CONFIG_H_CONTENT}")
 
+# Build-time automated source transpilation for MSVC
+if(MSVC)
+    auto_win_msvc_transform_sources(
+        SOURCES
+            "${MEMCACHED_SOURCE_DIR}/memcached.c"
+            "${MEMCACHED_SOURCE_DIR}/proto_bin.c"
+        OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/src_gen"
+        OUTPUT_VAR TRANSFORMED_MC_SOURCES
+    )
+    set(MEMCACHED_C_FILE "${CMAKE_CURRENT_BINARY_DIR}/src_gen/memcached.c")
+    set(PROTO_BIN_C_FILE "${CMAKE_CURRENT_BINARY_DIR}/src_gen/proto_bin.c")
+else()
+    set(MEMCACHED_C_FILE "${MEMCACHED_SOURCE_DIR}/memcached.c")
+    set(PROTO_BIN_C_FILE "${MEMCACHED_SOURCE_DIR}/proto_bin.c")
+endif()
+
 # Common source lists
 set(MEMCACHED_CORE_SOURCES
-    memcached.c
-    proto_bin.c
-    util.c
-    proto_parser.c
-    thread.c
-    hash.c
-    jenkins_hash.c
-    murmur3_hash.c
-    slabs.c
-    items.c
-    assoc.c
-    daemon.c
-    stats_prefix.c
-    cache.c
-    bipbuffer.c
-    base64.c
-    logger.c
-    crawler.c
-    itoa_ljust.c
-    slab_automove.c
-    slabs_mover.c
-    authfile.c
-    restart.c
-    proto_text.c
-    vendor/mcmc/mcmc.c
+    ${MEMCACHED_C_FILE}
+    ${PROTO_BIN_C_FILE}
+    ${MEMCACHED_SOURCE_DIR}/util.c
+    ${MEMCACHED_SOURCE_DIR}/proto_parser.c
+    ${MEMCACHED_SOURCE_DIR}/thread.c
+    ${MEMCACHED_SOURCE_DIR}/hash.c
+    ${MEMCACHED_SOURCE_DIR}/jenkins_hash.c
+    ${MEMCACHED_SOURCE_DIR}/murmur3_hash.c
+    ${MEMCACHED_SOURCE_DIR}/slabs.c
+    ${MEMCACHED_SOURCE_DIR}/items.c
+    ${MEMCACHED_SOURCE_DIR}/assoc.c
+    ${MEMCACHED_SOURCE_DIR}/daemon.c
+    ${MEMCACHED_SOURCE_DIR}/stats_prefix.c
+    ${MEMCACHED_SOURCE_DIR}/cache.c
+    ${MEMCACHED_SOURCE_DIR}/bipbuffer.c
+    ${MEMCACHED_SOURCE_DIR}/base64.c
+    ${MEMCACHED_SOURCE_DIR}/logger.c
+    ${MEMCACHED_SOURCE_DIR}/crawler.c
+    ${MEMCACHED_SOURCE_DIR}/itoa_ljust.c
+    ${MEMCACHED_SOURCE_DIR}/slab_automove.c
+    ${MEMCACHED_SOURCE_DIR}/slabs_mover.c
+    ${MEMCACHED_SOURCE_DIR}/authfile.c
+    ${MEMCACHED_SOURCE_DIR}/restart.c
+    ${MEMCACHED_SOURCE_DIR}/proto_text.c
+    ${MEMCACHED_SOURCE_DIR}/vendor/mcmc/mcmc.c
 )
 
 if(ENABLE_EXTSTORE)
     list(APPEND MEMCACHED_CORE_SOURCES
-        extstore.c
-        crc32c.c
-        storage.c
-        slab_automove_extstore.c
+        ${MEMCACHED_SOURCE_DIR}/extstore.c
+        ${MEMCACHED_SOURCE_DIR}/crc32c.c
+        ${MEMCACHED_SOURCE_DIR}/storage.c
+        ${MEMCACHED_SOURCE_DIR}/slab_automove_extstore.c
     )
 endif()
 
 if(ENABLE_TLS)
-    list(APPEND MEMCACHED_CORE_SOURCES tls.c)
+    list(APPEND MEMCACHED_CORE_SOURCES ${MEMCACHED_SOURCE_DIR}/tls.c)
 endif()
 
 if(ENABLE_SASL)
-    list(APPEND MEMCACHED_CORE_SOURCES sasl_defs.c)
+    list(APPEND MEMCACHED_CORE_SOURCES ${MEMCACHED_SOURCE_DIR}/sasl_defs.c)
 endif()
 
 # Define memcached executable
 add_executable(memcached ${MEMCACHED_CORE_SOURCES})
 
-if(WIN32 OR MSVC)
-    target_include_directories(memcached BEFORE PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/compat"
-    )
-endif()
-
 target_include_directories(memcached PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/vendor/mcmc"
+    "${CMAKE_CURRENT_BINARY_DIR}/src_gen"
+    "${MEMCACHED_SOURCE_DIR}"
+    "${MEMCACHED_SOURCE_DIR}/vendor/mcmc"
 )
 
 target_compile_definitions(memcached PRIVATE
     HAVE_CONFIG_H
+    AUTO_WIN_MSVC_NO_SOCKET_MACROS
 )
 
 if(MSVC)
@@ -306,7 +308,7 @@ if(MSVC)
         /W3
         /D_CRT_SECURE_NO_WARNINGS
         /D_CRT_NONSTDC_NO_DEPRECATE
-        /FI"${CMAKE_CURRENT_SOURCE_DIR}/win_compat.h"
+        /FIauto-win-msvc-configure.h
     )
 else()
     target_compile_options(memcached PRIVATE -Wall -pthread)
@@ -348,14 +350,11 @@ if(BUILD_TESTING)
     enable_testing()
 
     # Target: sizes
-    add_executable(sizes sizes.c)
-    if(WIN32 OR MSVC)
-        target_include_directories(sizes BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/compat")
-    endif()
-    target_include_directories(sizes PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_executable(sizes ${MEMCACHED_SOURCE_DIR}/sizes.c)
+    target_include_directories(sizes PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${MEMCACHED_SOURCE_DIR}")
     target_compile_definitions(sizes PRIVATE HAVE_CONFIG_H)
     if(MSVC)
-        target_compile_options(sizes PRIVATE /W3 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE /FI"${CMAKE_CURRENT_SOURCE_DIR}/win_compat.h")
+        target_compile_options(sizes PRIVATE /W3 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE /FIauto-win-msvc-configure.h)
     endif()
     target_link_libraries(sizes PRIVATE auto-win-msvc libevent::core libevent::extra)
     if(WIN32 OR MSVC)
@@ -371,59 +370,70 @@ if(BUILD_TESTING)
         ENVIRONMENT "WINEDEBUG=-all;MVK_CONFIG_LOG_LEVEL=0"
     )
 
-    # Target: testapp
-    set(TESTAPP_SOURCES
-        testapp.c
-        util.c
-        stats_prefix.c
-        jenkins_hash.c
-        murmur3_hash.c
-        cache.c
-        crc32c.c
-    )
-    add_executable(testapp ${TESTAPP_SOURCES})
-    if(WIN32 OR MSVC)
-        target_include_directories(testapp BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/compat")
-    endif()
-    target_include_directories(testapp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
-    target_compile_definitions(testapp PRIVATE HAVE_CONFIG_H)
-    if(MSVC)
-        target_compile_options(testapp PRIVATE /W3 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE /FI"${CMAKE_CURRENT_SOURCE_DIR}/win_compat.h" /UNDEBUG)
-    else()
-        target_compile_options(testapp PRIVATE -UNDEBUG)
-    endif()
-    target_link_libraries(testapp PRIVATE auto-win-msvc libevent::core libevent::extra)
-    if(WIN32 OR MSVC)
-        target_link_libraries(testapp PRIVATE ws2_32 dbghelp advapi32 userenv ole32 psapi bcrypt)
-    endif()
-    if(CMAKE_CROSSCOMPILING_EMULATOR)
-        set_target_properties(testapp PROPERTIES CROSSCOMPILING_EMULATOR "${CMAKE_CROSSCOMPILING_EMULATOR}")
-    elseif(MSVC AND NOT WIN32)
-        set_target_properties(testapp PROPERTIES CROSSCOMPILING_EMULATOR "wine")
-    endif()
-    add_test(NAME testapp COMMAND testapp)
-    set_tests_properties(testapp PROPERTIES
-        ENVIRONMENT "WINEDEBUG=-all;MVK_CONFIG_LOG_LEVEL=0"
-    )
+    # Optional Target: testapp (legacy fork/exec-based runner, superseded by c_test_runner)
+    option(BUILD_TESTAPP "Build legacy testapp" OFF)
+    if(BUILD_TESTAPP)
+        if(MSVC)
+            auto_win_msvc_transform_sources(
+                SOURCES "${MEMCACHED_SOURCE_DIR}/testapp.c"
+                OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/src_gen"
+                OUTPUT_VAR TRANSFORMED_TESTAPP
+            )
+            set(TESTAPP_C_FILE "${CMAKE_CURRENT_BINARY_DIR}/src_gen/testapp.c")
+        else()
+            set(TESTAPP_C_FILE "${MEMCACHED_SOURCE_DIR}/testapp.c")
+        endif()
 
-    # Target: timedrun
-    add_executable(timedrun timedrun.c)
-    if(WIN32 OR MSVC)
-        target_include_directories(timedrun BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/compat")
+        set(TESTAPP_SOURCES
+            ${TESTAPP_C_FILE}
+            ${MEMCACHED_SOURCE_DIR}/util.c
+            ${MEMCACHED_SOURCE_DIR}/stats_prefix.c
+            ${MEMCACHED_SOURCE_DIR}/jenkins_hash.c
+            ${MEMCACHED_SOURCE_DIR}/murmur3_hash.c
+            ${MEMCACHED_SOURCE_DIR}/cache.c
+            ${MEMCACHED_SOURCE_DIR}/crc32c.c
+        )
+        add_executable(testapp EXCLUDE_FROM_ALL ${TESTAPP_SOURCES})
+        target_include_directories(testapp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/src_gen" "${MEMCACHED_SOURCE_DIR}")
+        target_compile_definitions(testapp PRIVATE HAVE_CONFIG_H)
+        if(MSVC)
+            target_compile_options(testapp PRIVATE /W3 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE /FIauto-win-msvc-configure.h /UNDEBUG)
+        else()
+            target_compile_options(testapp PRIVATE -UNDEBUG)
+        endif()
+        target_link_libraries(testapp PRIVATE auto-win-msvc libevent::core libevent::extra)
+        if(WIN32 OR MSVC)
+            target_link_libraries(testapp PRIVATE ws2_32 dbghelp advapi32 userenv ole32 psapi bcrypt)
+        endif()
+        if(CMAKE_CROSSCOMPILING_EMULATOR)
+            set_target_properties(testapp PROPERTIES CROSSCOMPILING_EMULATOR "${CMAKE_CROSSCOMPILING_EMULATOR}")
+        elseif(MSVC AND NOT WIN32)
+            set_target_properties(testapp PROPERTIES CROSSCOMPILING_EMULATOR "wine")
+        endif()
+        add_test(NAME testapp COMMAND testapp)
+        set_tests_properties(testapp PROPERTIES
+            ENVIRONMENT "WINEDEBUG=-all;MVK_CONFIG_LOG_LEVEL=0"
+        )
     endif()
-    target_include_directories(timedrun PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
-    target_compile_definitions(timedrun PRIVATE HAVE_CONFIG_H)
-    if(MSVC)
-        target_compile_options(timedrun PRIVATE /W3 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE /FI"${CMAKE_CURRENT_SOURCE_DIR}/win_compat.h")
-    endif()
-    target_link_libraries(timedrun PRIVATE auto-win-msvc libevent::core libevent::extra)
-    if(WIN32 OR MSVC)
-        target_link_libraries(timedrun PRIVATE ws2_32 dbghelp advapi32 userenv ole32 psapi bcrypt)
-    endif()
-    if(CMAKE_CROSSCOMPILING_EMULATOR)
-        set_target_properties(timedrun PROPERTIES CROSSCOMPILING_EMULATOR "${CMAKE_CROSSCOMPILING_EMULATOR}")
-    elseif(MSVC AND NOT WIN32)
-        set_target_properties(timedrun PROPERTIES CROSSCOMPILING_EMULATOR "wine")
+
+    # Optional Target: timedrun
+    option(BUILD_TIMEDRUN "Build legacy timedrun" OFF)
+    if(BUILD_TIMEDRUN)
+        add_executable(timedrun EXCLUDE_FROM_ALL ${MEMCACHED_SOURCE_DIR}/timedrun.c)
+        target_include_directories(timedrun PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${MEMCACHED_SOURCE_DIR}")
+        target_compile_definitions(timedrun PRIVATE HAVE_CONFIG_H)
+        if(MSVC)
+            target_compile_options(timedrun PRIVATE /W3 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE /FIauto-win-msvc-configure.h)
+        endif()
+        target_link_libraries(timedrun PRIVATE auto-win-msvc libevent::core libevent::extra)
+        if(WIN32 OR MSVC)
+            target_link_libraries(timedrun PRIVATE ws2_32 dbghelp advapi32 userenv ole32 psapi bcrypt)
+        endif()
+        if(CMAKE_CROSSCOMPILING_EMULATOR)
+            set_target_properties(timedrun PROPERTIES CROSSCOMPILING_EMULATOR "${CMAKE_CROSSCOMPILING_EMULATOR}")
+        elseif(MSVC AND NOT WIN32)
+            set_target_properties(timedrun PROPERTIES CROSSCOMPILING_EMULATOR "wine")
+        endif()
     endif()
 
     # Cross-platform C89 Test Suite integrated into CTest
@@ -450,13 +460,10 @@ if(BUILD_TESTING)
         tests/test_slabs.c
     )
     add_executable(c_test_runner ${C_TEST_SOURCES})
-    if(WIN32 OR MSVC)
-        target_include_directories(c_test_runner BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/compat")
-    endif()
-    target_include_directories(c_test_runner PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/tests")
-    target_compile_definitions(c_test_runner PRIVATE HAVE_CONFIG_H)
+    target_include_directories(c_test_runner PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/tests" "${MEMCACHED_SOURCE_DIR}")
+    target_compile_definitions(c_test_runner PRIVATE HAVE_CONFIG_H AUTO_WIN_MSVC_NO_SOCKET_MACROS)
     if(MSVC)
-        target_compile_options(c_test_runner PRIVATE /W3 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE /FI"${CMAKE_CURRENT_SOURCE_DIR}/win_compat.h")
+        target_compile_options(c_test_runner PRIVATE /W3 /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_DEPRECATE /FIauto-win-msvc-configure.h)
     endif()
     target_link_libraries(c_test_runner PRIVATE auto-win-msvc libevent::core libevent::extra)
     if(WIN32 OR MSVC)
@@ -476,6 +483,7 @@ if(BUILD_TESTING)
     elseif(MSVC AND NOT WIN32)
         list(APPEND C_TEST_ENV "MEMCACHED_EMULATOR=wine")
     endif()
+    list(APPEND C_TEST_ENV "WINEDEBUG=-all" "MVK_CONFIG_LOG_LEVEL=0")
 
     set(C_TEST_MODULES
         test_startup
@@ -594,11 +602,11 @@ if(WIN32)
     endif()
 endif()
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/COPYING")
-    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/COPYING" DESTINATION . COMPONENT memcached RENAME "COPYING.txt")
+if(EXISTS "${MEMCACHED_SOURCE_DIR}/COPYING")
+    install(FILES "${MEMCACHED_SOURCE_DIR}/COPYING" DESTINATION . COMPONENT memcached RENAME "COPYING.txt")
 endif()
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
-    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/README.md" DESTINATION . COMPONENT memcached)
+if(EXISTS "${MEMCACHED_SOURCE_DIR}/README.md")
+    install(FILES "${MEMCACHED_SOURCE_DIR}/README.md" DESTINATION . COMPONENT memcached)
 endif()
 
 set(CPACK_PACKAGE_NAME "Memcached")
@@ -606,7 +614,7 @@ set(CPACK_PACKAGE_VENDOR "Memcached")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "High-performance, distributed memory object caching system.")
 set(CPACK_PACKAGE_HOMEPAGE_URL "https://memcached.org")
 set(CPACK_PACKAGE_CONTACT "Samuel Marks <807580+SamuelMarks@users.noreply.github.com>")
-set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/COPYING")
+set(CPACK_RESOURCE_FILE_LICENSE "${MEMCACHED_SOURCE_DIR}/COPYING")
 set(CPACK_PACKAGE_VERSION "${MEMCACHED_VERSION}")
 set(CPACK_PACKAGE_VERSION_MAJOR "${PROJECT_VERSION_MAJOR}")
 set(CPACK_PACKAGE_VERSION_MINOR "${PROJECT_VERSION_MINOR}")
@@ -628,11 +636,10 @@ if(WIN32)
     # NSIS generator settings
     set(CPACK_NSIS_DISPLAY_NAME "Memcached ${PROJECT_VERSION}")
     set(CPACK_NSIS_PACKAGE_NAME "Memcached")
-    set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "ExecWait '$\\\"$INSTDIR\\\\bin\\\\memcached-service.exe$\\\" install'\nExecWait '$\\\"$INSTDIR\\\\bin\\\\memcached-service.exe$\\\" start'")
-    set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "ExecWait '$\\\"$INSTDIR\\\\bin\\\\memcached-service.exe$\\\" stop'\nExecWait '$\\\"$INSTDIR\\\\bin\\\\memcached-service.exe$\\\" uninstall'")
+    set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "ExecWait \\\"$INSTDIR\\\\bin\\\\memcached-service.exe install\\\"\\nExecWait \\\"$INSTDIR\\\\bin\\\\memcached-service.exe start\\\"")
+    set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "ExecWait \\\"$INSTDIR\\\\bin\\\\memcached-service.exe stop\\\"\\nExecWait \\\"$INSTDIR\\\\bin\\\\memcached-service.exe uninstall\\\"")
 else()
     set(CPACK_GENERATOR "TGZ;ZIP")
 endif()
 
 include(CPack)
-

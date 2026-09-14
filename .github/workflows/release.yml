@@ -289,23 +289,18 @@ jobs:
               }
           }
 
-      - name: Apply Overlay
-        shell: pwsh
-        run: |
-          Copy-Item -Recurse -Force build-repo\overlay\* memcached
-
       - name: Prepare Windows Service Wrapper
-        working-directory: memcached
+        working-directory: build-repo
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri "https://github.com/winsw/winsw/releases/download/v3.0.0-alpha.11/WinSW-x64.exe" -OutFile "memcached-service.exe"
-          Copy-Item "..\build-repo\packaging\memcached-service.xml" -Destination "memcached-service.xml"
+          Copy-Item "packaging\memcached-service.xml" -Destination "memcached-service.xml"
 
       - name: Install NSIS
         run: choco install nsis -y
 
       - name: Configure CMake
-        working-directory: memcached
+        working-directory: build-repo
         shell: pwsh
         run: |
           $buildTesting = if ('${{ needs.prepare.outputs.run_tests }}' -eq 'true') { 'ON' } else { 'OFF' }
@@ -319,6 +314,7 @@ jobs:
               "-B", "$env:BUILD_DIR",
               "-A", "x64",
               "-DCMAKE_BUILD_TYPE=$env:BUILD_TYPE",
+              "-DMEMCACHED_SOURCE_DIR=..\memcached",
               "-DMEMCACHED_VERSION=${{ needs.prepare.outputs.version }}",
               "-DBUILD_TESTING=$buildTesting",
               "-DENABLE_EXTSTORE=$extstore",
@@ -397,18 +393,18 @@ jobs:
           }
 
       - name: Build Memcached
-        working-directory: memcached
+        working-directory: build-repo
         run: cmake --build ${{ env.BUILD_DIR }} --config ${{ env.BUILD_TYPE }}
 
       - name: Run CTest Suite
         if: needs.prepare.outputs.run_tests == 'true'
-        working-directory: memcached/${{ env.BUILD_DIR }}
+        working-directory: build-repo/${{ env.BUILD_DIR }}
         run: ctest -C ${{ env.BUILD_TYPE }} --output-on-failure -E testapp
         continue-on-error: true
 
       - name: E2E Smoke Testing
         if: needs.prepare.outputs.run_tests == 'true'
-        working-directory: memcached
+        working-directory: build-repo
         shell: pwsh
         run: |
           $cfg = "$env:BUILD_TYPE"
@@ -471,14 +467,14 @@ jobs:
           }
 
       - name: Package with CPack
-        working-directory: memcached/${{ env.BUILD_DIR }}
+        working-directory: build-repo/${{ env.BUILD_DIR }}
         run: |
           cpack -G WIX -C ${{ env.BUILD_TYPE }}
           cpack -G NSIS -C ${{ env.BUILD_TYPE }}
           cpack -G ZIP -C ${{ env.BUILD_TYPE }}
 
       - name: Prepare Versioned Artifacts
-        working-directory: memcached
+        working-directory: build-repo
         shell: pwsh
         run: |
           $ver = "${{ needs.prepare.outputs.version }}"
@@ -519,7 +515,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: Memcached-Windows-${{ needs.prepare.outputs.tag }}-${{ env.BUILD_TYPE }}
-          path: memcached/dist/*
+          path: build-repo/dist/*
 
       - name: Create GitHub Release
         if: needs.prepare.outputs.publish_release == 'true'
@@ -528,6 +524,6 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: ${{ needs.prepare.outputs.release_name }}
           prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
-          files: memcached/dist/*
+          files: build-repo/dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

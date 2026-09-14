@@ -39,7 +39,7 @@ goto parse_args
 set REPO_DIR=%~dp0
 set WORK_DIR=%REPO_DIR%build_work
 set SRC_DIR=%WORK_DIR%\memcached
-set BUILD_DIR=build_msvc
+set BUILD_DIR=%REPO_DIR%build_msvc
 
 echo =======================================================
 echo Building Memcached for Windows at ref: %MEMCACHED_REF%
@@ -85,15 +85,13 @@ if not "%GIT_HASH%"=="" (
     )
 )
 
-echo [2/6] Applying overlay and packaging files...
-xcopy /E /I /Y "%REPO_DIR%overlay\*" "%SRC_DIR%\" >nul
-
-echo Preparing Windows Service Wrapper (WinSW)...
-powershell -Command "Invoke-WebRequest -Uri 'https://github.com/winsw/winsw/releases/download/v3.0.0-alpha.11/WinSW-x64.exe' -OutFile '%SRC_DIR%\memcached-service.exe'"
-copy /y "%REPO_DIR%packaging\memcached-service.xml" "%SRC_DIR%\memcached-service.xml" >nul
+echo [2/6] Preparing Windows Service Wrapper (WinSW)...
+if not exist "%REPO_DIR%memcached-service.exe" (
+    powershell -Command "Invoke-WebRequest -Uri 'https://github.com/winsw/winsw/releases/download/v3.0.0-alpha.11/WinSW-x64.exe' -OutFile '%REPO_DIR%memcached-service.exe'"
+)
 
 echo [3/6] Configuring CMake with MSVC...
-cd /d "%SRC_DIR%"
+cd /d "%REPO_DIR%"
 
 set "HAS_VS2026="
 set "HAS_VS2022="
@@ -125,44 +123,44 @@ if "!MSVC_VER!"=="2022" (
         echo Visual Studio 2022 requested but not detected.
         if defined HAS_VS2026 (
             echo Visual Studio 2026 is installed; trying Visual Studio 2026 first...
-            cmake -G "Visual Studio 18 2026" -A x64 -B %BUILD_DIR% -S .
+            cmake -G "Visual Studio 18 2026" -A x64 -B "%BUILD_DIR%" -S "%REPO_DIR%" -DMEMCACHED_SOURCE_DIR="%SRC_DIR%" -DMEMCACHED_VERSION=%MEMCACHED_REF%
             if not errorlevel 1 set "CMAKE_CONFIGURED=1"
         )
     )
     if "!CMAKE_CONFIGURED!"=="0" (
         echo Configuring with Visual Studio 17 2022...
         if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
-        cmake -G "Visual Studio 17 2022" -A x64 -B %BUILD_DIR% -S .
+        cmake -G "Visual Studio 17 2022" -A x64 -B "%BUILD_DIR%" -S "%REPO_DIR%" -DMEMCACHED_SOURCE_DIR="%SRC_DIR%" -DMEMCACHED_VERSION=%MEMCACHED_REF%
         if not errorlevel 1 (
             set "CMAKE_CONFIGURED=1"
         ) else (
             echo Visual Studio 17 2022 configuration failed; attempting fallback to Visual Studio 18 2026...
             if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
-            cmake -G "Visual Studio 18 2026" -A x64 -B %BUILD_DIR% -S .
+            cmake -G "Visual Studio 18 2026" -A x64 -B "%BUILD_DIR%" -S "%REPO_DIR%" -DMEMCACHED_SOURCE_DIR="%SRC_DIR%" -DMEMCACHED_VERSION=%MEMCACHED_REF%
             if not errorlevel 1 set "CMAKE_CONFIGURED=1"
         )
     )
 ) else if "!MSVC_VER!"=="2026" (
     echo Configuring with Visual Studio 18 2026...
-    cmake -G "Visual Studio 18 2026" -A x64 -B %BUILD_DIR% -S .
+    cmake -G "Visual Studio 18 2026" -A x64 -B "%BUILD_DIR%" -S "%REPO_DIR%" -DMEMCACHED_SOURCE_DIR="%SRC_DIR%" -DMEMCACHED_VERSION=%MEMCACHED_REF%
     if not errorlevel 1 (
         set "CMAKE_CONFIGURED=1"
     ) else (
         echo Visual Studio 18 2026 configuration failed; attempting fallback to Visual Studio 17 2022...
         if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
-        cmake -G "Visual Studio 17 2022" -A x64 -B %BUILD_DIR% -S .
+        cmake -G "Visual Studio 17 2022" -A x64 -B "%BUILD_DIR%" -S "%REPO_DIR%" -DMEMCACHED_SOURCE_DIR="%SRC_DIR%" -DMEMCACHED_VERSION=%MEMCACHED_REF%
         if not errorlevel 1 set "CMAKE_CONFIGURED=1"
     )
 ) else (
     :: Default: Try Visual Studio 2026 first; if 2022 isn't installed it'll try 2026
     echo Detecting MSVC... Trying Visual Studio 18 2026 first...
-    cmake -G "Visual Studio 18 2026" -A x64 -B %BUILD_DIR% -S .
+    cmake -G "Visual Studio 18 2026" -A x64 -B "%BUILD_DIR%" -S "%REPO_DIR%" -DMEMCACHED_SOURCE_DIR="%SRC_DIR%" -DMEMCACHED_VERSION=%MEMCACHED_REF%
     if not errorlevel 1 (
         set "CMAKE_CONFIGURED=1"
     ) else (
         echo Visual Studio 18 2026 configuration failed; trying Visual Studio 17 2022...
         if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
-        cmake -G "Visual Studio 17 2022" -A x64 -B %BUILD_DIR% -S .
+        cmake -G "Visual Studio 17 2022" -A x64 -B "%BUILD_DIR%" -S "%REPO_DIR%" -DMEMCACHED_SOURCE_DIR="%SRC_DIR%" -DMEMCACHED_VERSION=%MEMCACHED_REF%
         if not errorlevel 1 set "CMAKE_CONFIGURED=1"
     )
 )
@@ -173,25 +171,23 @@ if "!CMAKE_CONFIGURED!"=="0" (
 )
 
 echo [4/6] Building Memcached (Release)...
-cmake --build %BUILD_DIR% --config Release
+cmake --build "%BUILD_DIR%" --config Release --target memcached c_test_runner sizes
 if errorlevel 1 (
     echo Build failed.
     exit /b 1
 )
 
 echo [5/6] Running Test Suite...
-cd /d "%SRC_DIR%\%BUILD_DIR%"
+cd /d "%BUILD_DIR%"
 ctest -C Release --output-on-failure -E testapp
-if errorlevel 1 (
-    echo Some unit tests failed.
-) else (
-    echo Unit test suite passed successfully.
+if exist "%BUILD_DIR%\Release\c_test_runner.exe" (
+    "%BUILD_DIR%\Release\c_test_runner.exe" all
 )
 
 echo Running E2E Smoke Tests...
-set MEMCACHED_EXE="%SRC_DIR%\%BUILD_DIR%\Release\memcached.exe"
-if not exist %MEMCACHED_EXE% set MEMCACHED_EXE="%SRC_DIR%\%BUILD_DIR%\bin\Release\memcached.exe"
-if not exist %MEMCACHED_EXE% set MEMCACHED_EXE="%SRC_DIR%\%BUILD_DIR%\memcached.exe"
+set MEMCACHED_EXE="%BUILD_DIR%\Release\memcached.exe"
+if not exist %MEMCACHED_EXE% set MEMCACHED_EXE="%BUILD_DIR%\bin\Release\memcached.exe"
+if not exist %MEMCACHED_EXE% set MEMCACHED_EXE="%BUILD_DIR%\memcached.exe"
 
 if not exist %MEMCACHED_EXE% (
     echo Memcached executable not found!
@@ -212,7 +208,7 @@ echo E2E smoke tests passed!
 taskkill /f /im memcached.exe 2>nul
 
 echo [6/6] Packaging with CPack...
-cd /d "%SRC_DIR%\%BUILD_DIR%"
+cd /d "%BUILD_DIR%"
 cpack -G WIX -C Release
 cpack -G NSIS -C Release
 cpack -G ZIP -C Release
@@ -221,7 +217,7 @@ if "!LOCAL_ONLY!"=="1" (
     echo.
     echo =======================================================
     echo --local-only specified. Skipping Git tagging and GitHub Release.
-    echo Artifacts generated in: %SRC_DIR%\%BUILD_DIR%
+    echo Artifacts generated in: %BUILD_DIR%
     echo Done!
     exit /b 0
 )
@@ -237,7 +233,7 @@ gh release delete %TAG_NAME% -y --cleanup-tag 2>nul
 git tag %TAG_NAME%
 git push origin %TAG_NAME%
 
-set ASSETS="%SRC_DIR%\%BUILD_DIR%\Memcached-*.msi" "%SRC_DIR%\%BUILD_DIR%\Memcached-*.exe" "%SRC_DIR%\%BUILD_DIR%\Memcached-*.zip" %MEMCACHED_EXE%
+set ASSETS="%BUILD_DIR%\Memcached-*.msi" "%BUILD_DIR%\Memcached-*.exe" "%BUILD_DIR%\Memcached-*.zip" %MEMCACHED_EXE%
 gh release create %TAG_NAME% %ASSETS% --title "Memcached %MEMCACHED_REF% for Windows" --notes "Automated Windows MSVC native builds for Memcached %MEMCACHED_REF%"
 
 if errorlevel 1 (

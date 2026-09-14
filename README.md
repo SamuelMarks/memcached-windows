@@ -2,6 +2,7 @@ Memcached Windows Native (MSVC) builds
 ======================================
 
 [![License](https://img.shields.io/badge/license-CC0%20OR%20Apache--2.0%20OR%20MIT-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Build and Release Memcached Windows](https://github.com/SamuelMarks/memcached-windows/actions/workflows/release.yml/badge.svg)](https://github.com/SamuelMarks/memcached-windows/actions/workflows/release.yml)
 
 This repository provides **native Windows builds** of [Memcached](https://github.com/memcached/memcached) using the Microsoft Visual C++ (MSVC) toolchain and CMake.
 
@@ -101,7 +102,10 @@ We provide an automated script (`release.bat` or `build-and-release.bat`) that c
 3. Configure and build:
    ```cmd
    cd memcached
-   cmake -B build_msvc -S . -G "Visual Studio 17 2022" -A x64
+   :: Try Visual Studio 2026 first, or Visual Studio 2022:
+   cmake -B build_msvc -S . -G "Visual Studio 18 2026" -A x64
+   :: Or for Visual Studio 2022:
+   :: cmake -B build_msvc -S . -G "Visual Studio 17 2022" -A x64
    cmake --build build_msvc --config Release
    ```
 

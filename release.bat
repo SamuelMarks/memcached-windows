@@ -6,6 +6,7 @@ if "%~1"=="" (
     echo Example: %0 1.6.45
     echo Example: %0 1.6.45 --local-only
     echo Example: %0 master --local-only
+    echo Example: %0 1.6.45 --msvc 2026
     echo Example: %0 1.6.45 --msvc 2022
     exit /b 1
 )

@@ -264,10 +264,9 @@ jobs:
           $sasl = if ('${{ needs.prepare.outputs.enable_sasl }}' -eq 'true') { 'ON' } else { 'OFF' }
           $proxy = if ('${{ needs.prepare.outputs.enable_proxy }}' -eq 'true') { 'ON' } else { 'OFF' }
 
-          $cmakeArgs = @(
+          $baseArgs = @(
               "-S", ".",
               "-B", "$env:BUILD_DIR",
-              "-G", "Visual Studio 17 2022",
               "-A", "x64",
               "-DCMAKE_BUILD_TYPE=$env:BUILD_TYPE",
               "-DMEMCACHED_VERSION=${{ needs.prepare.outputs.version }}",
@@ -278,8 +277,15 @@ jobs:
               "-DENABLE_PROXY=$proxy"
           )
 
-          Write-Host "Configuring CMake with arguments: $cmakeArgs"
-          cmake @cmakeArgs
+          Write-Host "Attempting CMake configuration with Visual Studio 18 2026..."
+          cmake -G "Visual Studio 18 2026" @baseArgs
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "Visual Studio 18 2026 not available or failed; falling back to Visual Studio 17 2022..."
+              if (Test-Path "$env:BUILD_DIR") {
+                  Remove-Item -Recurse -Force "$env:BUILD_DIR"
+              }
+              cmake -G "Visual Studio 17 2022" @baseArgs
+          }
           if ($LASTEXITCODE -ne 0) {
               Write-Error "CMake configuration failed."
               exit 1

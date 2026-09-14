@@ -78,7 +78,8 @@ We provide an automated script (`release.bat` or `build-and-release.bat`) that c
 :: Build, test, and package locally without publishing:
 .\release.bat 1.6.45 --local-only
 
-:: Specify MSVC version (e.g. 2022 or 2026):
+:: Specify MSVC version (e.g. 2026 or 2022; tries 2026 first by default, and if 2022 isn't installed it tries 2026):
+.\release.bat 1.6.45 --local-only --msvc 2026
 .\release.bat 1.6.45 --local-only --msvc 2022
 
 :: Build latest master branch:

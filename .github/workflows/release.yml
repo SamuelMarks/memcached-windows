@@ -47,6 +47,11 @@ on:
         required: false
         default: true
         type: boolean
+      msvc_version:
+        description: "MSVC / Visual Studio version (e.g. '2026' or '2022'; empty to try 2026 first then 2022)"
+        required: false
+        default: ""
+        type: string
   schedule:
     - cron: "0 0 * * 0" # Weekly check for new upstream releases
   push:
@@ -75,10 +80,11 @@ jobs:
       enable_proxy: ${{ steps.determine-ref.outputs.enable_proxy }}
       run_tests: ${{ steps.determine-ref.outputs.run_tests }}
       publish_release: ${{ steps.determine-ref.outputs.publish_release }}
+      msvc_version: ${{ steps.determine-ref.outputs.msvc_version }}
     steps:
       - name: Determine Memcached Parameters
         id: determine-ref
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const inputs = (context.payload && context.payload.inputs) || {};
@@ -89,6 +95,7 @@ jobs:
             const enableProxy = inputs.enable_proxy !== undefined ? String(inputs.enable_proxy) : "false";
             const runTests = inputs.run_tests !== undefined ? String(inputs.run_tests) : "true";
             const publishRelease = inputs.publish_release !== undefined ? String(inputs.publish_release) : "true";
+            const msvcVersion = (inputs.msvc_version || "").trim();
 
             async function fetchLatestUpstreamTag() {
               try {
@@ -211,6 +218,7 @@ jobs:
             core.setOutput("enable_proxy", enableProxy);
             core.setOutput("run_tests", runTests);
             core.setOutput("publish_release", publishRelease);
+            core.setOutput("msvc_version", msvcVersion);
 
   build-and-release:
     needs: prepare
@@ -221,23 +229,65 @@ jobs:
       BUILD_DIR: build_msvc
     steps:
       - name: Checkout Build Scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: build-repo
 
       - name: Checkout Memcached
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: memcached/memcached
           ref: ${{ needs.prepare.outputs.ref }}
           path: memcached
 
       - name: Checkout auto-win-msvc
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ github.repository_owner }}/auto-win-msvc
           path: auto-win-msvc
         continue-on-error: true
+
+      - name: Patch auto-win-msvc dependencies
+        shell: pwsh
+        run: |
+          if (Test-Path "auto-win-msvc/linux-epoll") {
+              $patchFile = "auto-win-msvc/linux-epoll/patch_wepoll.cmake"
+              if (-not (Test-Path $patchFile)) {
+                  Write-Host "Creating missing patch_wepoll.cmake in auto-win-msvc/linux-epoll..."
+                  $cmakeCode = @(
+                      'if(DEFINED WEPOLL_SOURCE_DIR AND EXISTS "${WEPOLL_SOURCE_DIR}/wepoll.c")',
+                      '    set(_wepoll_file "${WEPOLL_SOURCE_DIR}/wepoll.c")',
+                      'elseif(EXISTS "${CMAKE_CURRENT_LIST_DIR}/wepoll.c")',
+                      '    set(_wepoll_file "${CMAKE_CURRENT_LIST_DIR}/wepoll.c")',
+                      'elseif(EXISTS "wepoll.c")',
+                      '    set(_wepoll_file "wepoll.c")',
+                      'endif()',
+                      '',
+                      'if(DEFINED _wepoll_file AND EXISTS "${_wepoll_file}")',
+                      '    file(READ "${_wepoll_file}" _content)',
+                      '    string(REPLACE "typedef void* nt__fn_ptr_cast_t;" "typedef void (*nt__fn_ptr_cast_t)(void);" _content "${_content}")',
+                      '    string(REPLACE "typedef struct tree {" "struct tree {" _content "${_content}")',
+                      '    string(REPLACE "typedef struct tree_node {" "struct tree_node {" _content "${_content}")',
+                      '    string(REPLACE "typedef struct ts_tree_node {" "struct ts_tree_node {" _content "${_content}")',
+                      '    string(REPLACE "typedef struct queue_node {" "struct queue_node {" _content "${_content}")',
+                      '    string(REPLACE "typedef struct queue {" "struct queue {" _content "${_content}")',
+                      '    string(REPLACE "typedef struct poll_group {" "struct poll_group {" _content "${_content}")',
+                      '    string(REPLACE "typedef struct port_state {" "struct port_state {" _content "${_content}")',
+                      '    string(REPLACE "typedef struct sock_state {" "struct sock_state {" _content "${_content}")',
+                      '    string(REPLACE "} tree_t;" "};" _content "${_content}")',
+                      '    string(REPLACE "} tree_node_t;" "};" _content "${_content}")',
+                      '    string(REPLACE "} ts_tree_node_t;" "};" _content "${_content}")',
+                      '    string(REPLACE "} queue_node_t;" "};" _content "${_content}")',
+                      '    string(REPLACE "} queue_t;" "};" _content "${_content}")',
+                      '    string(REPLACE "} poll_group_t;" "};" _content "${_content}")',
+                      '    string(REPLACE "} port_state_t;" "};" _content "${_content}")',
+                      '    string(REPLACE "} sock_state_t;" "};" _content "${_content}")',
+                      '    file(WRITE "${_wepoll_file}" "${_content}")',
+                      'endif()'
+                  ) -join "`n"
+                  Set-Content -Path $patchFile -Value $cmakeCode -Encoding UTF8
+              }
+          }
 
       - name: Apply Overlay
         shell: pwsh
@@ -277,17 +327,72 @@ jobs:
               "-DENABLE_PROXY=$proxy"
           )
 
-          Write-Host "Attempting CMake configuration with Visual Studio 18 2026..."
-          cmake -G "Visual Studio 18 2026" @baseArgs
-          if ($LASTEXITCODE -ne 0) {
-              Write-Host "Visual Studio 18 2026 not available or failed; falling back to Visual Studio 17 2022..."
+          # Detect installed Visual Studio versions using vswhere and filesystem
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $hasVS2026 = $false
+          $hasVS2022 = $false
+
+          if (Test-Path $vswhere) {
+              $path2026 = & $vswhere -version "[18.0,19.0)" -property installationPath 2>$null
+              if ($path2026) { $hasVS2026 = $true }
+              $path2022 = & $vswhere -version "[17.0,18.0)" -property installationPath 2>$null
+              if ($path2022) { $hasVS2022 = $true }
+          }
+          if (-not $hasVS2026) {
+              if ((Test-Path "C:\Program Files\Microsoft Visual Studio\18") -or (Test-Path "C:\Program Files\Microsoft Visual Studio\2026")) {
+                  $hasVS2026 = $true
+              }
+          }
+          if (-not $hasVS2022) {
+              if ((Test-Path "C:\Program Files\Microsoft Visual Studio\2022") -or (Test-Path "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022")) {
+                  $hasVS2022 = $true
+              }
+          }
+
+          Write-Host "Visual Studio detection: VS 2026 detected: $hasVS2026, VS 2022 detected: $hasVS2022"
+
+          $requestedMsvc = "${{ needs.prepare.outputs.msvc_version }}".Trim()
+
+          # Build prioritized generator list: try 2026 first; if 2022 isn't installed it'll try 2026
+          $generators = @()
+          if ($requestedMsvc -eq "2022") {
+              if ($hasVS2022) {
+                  $generators += "Visual Studio 17 2022"
+                  $generators += "Visual Studio 18 2026"
+              } else {
+                  Write-Host "Visual Studio 2022 requested but not installed; trying Visual Studio 2026 first."
+                  $generators += "Visual Studio 18 2026"
+                  $generators += "Visual Studio 17 2022"
+              }
+          } elseif ($requestedMsvc -eq "2026") {
+              $generators += "Visual Studio 18 2026"
+              if ($hasVS2022) { $generators += "Visual Studio 17 2022" }
+          } else {
+              # Default: Try Visual Studio 2026 first, then Visual Studio 2022
+              $generators += "Visual Studio 18 2026"
+              if ($hasVS2022 -or (-not $hasVS2026)) {
+                  $generators += "Visual Studio 17 2022"
+              }
+          }
+
+          $configured = $false
+          foreach ($gen in $generators) {
+              Write-Host "Attempting CMake configuration with $gen..."
               if (Test-Path "$env:BUILD_DIR") {
                   Remove-Item -Recurse -Force "$env:BUILD_DIR"
               }
-              cmake -G "Visual Studio 17 2022" @baseArgs
+              cmake -G $gen @baseArgs
+              if ($LASTEXITCODE -eq 0) {
+                  Write-Host "Successfully configured CMake with $gen"
+                  $configured = $true
+                  break
+              } else {
+                  Write-Host "CMake configuration failed with $gen; will attempt alternative generator if available."
+              }
           }
-          if ($LASTEXITCODE -ne 0) {
-              Write-Error "CMake configuration failed."
+
+          if (-not $configured) {
+              Write-Error "CMake configuration failed with all attempted generators ($($generators -join ', '))."
               exit 1
           }
 
@@ -411,14 +516,14 @@ jobs:
           Get-ChildItem -Path $distDir | Format-Table Name, Length
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Memcached-Windows-${{ needs.prepare.outputs.tag }}-${{ env.BUILD_TYPE }}
           path: memcached/dist/*
 
       - name: Create GitHub Release
         if: needs.prepare.outputs.publish_release == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: ${{ needs.prepare.outputs.release_name }}

@@ -15,7 +15,7 @@ new file mode 100644
 index 0000000..2bddf1b
 --- /dev/null
 +++ b/CMakeLists.txt
-@@ -0,0 +1,596 @@
+@@ -0,0 +1,638 @@
 +set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 +cmake_minimum_required(VERSION 3.24)
 +if(POLICY CMP0091)

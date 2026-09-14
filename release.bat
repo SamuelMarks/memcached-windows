@@ -95,17 +95,79 @@ copy /y "%REPO_DIR%packaging\memcached-service.xml" "%SRC_DIR%\memcached-service
 echo [3/6] Configuring CMake with MSVC...
 cd /d "%SRC_DIR%"
 
-if "!MSVC_VER!"=="2022" (
-    cmake -G "Visual Studio 17 2022" -A x64 -B %BUILD_DIR% -S .
-) else if "!MSVC_VER!"=="2026" (
-    cmake -G "Visual Studio 18 2026" -A x64 -B %BUILD_DIR% -S .
-) else (
-    cmake -G "Visual Studio 18 2026" -A x64 -B %BUILD_DIR% -S . 2>nul
-    if errorlevel 1 (
-        cmake -G "Visual Studio 17 2022" -A x64 -B %BUILD_DIR% -S .
+set "HAS_VS2026="
+set "HAS_VS2022="
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+
+if exist "%VSWHERE%" (
+    for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -version "[18.0,19.0)" -property installationPath 2^>nul`) do (
+        if not "%%i"=="" set "HAS_VS2026=%%i"
+    )
+    for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -version "[17.0,18.0)" -property installationPath 2^>nul`) do (
+        if not "%%i"=="" set "HAS_VS2022=%%i"
     )
 )
-if errorlevel 1 (
+
+if not defined HAS_VS2026 (
+    if exist "%ProgramFiles%\Microsoft Visual Studio\18" set "HAS_VS2026=%ProgramFiles%\Microsoft Visual Studio\18"
+    if exist "%ProgramFiles%\Microsoft Visual Studio\2026" set "HAS_VS2026=%ProgramFiles%\Microsoft Visual Studio\2026"
+)
+
+if not defined HAS_VS2022 (
+    if exist "%ProgramFiles%\Microsoft Visual Studio\2022" set "HAS_VS2022=%ProgramFiles%\Microsoft Visual Studio\2022"
+    if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\2022" set "HAS_VS2022=%ProgramFiles(x86)%\Microsoft Visual Studio\2022"
+)
+
+set "CMAKE_CONFIGURED=0"
+
+if "!MSVC_VER!"=="2022" (
+    if not defined HAS_VS2022 (
+        echo Visual Studio 2022 requested but not detected.
+        if defined HAS_VS2026 (
+            echo Visual Studio 2026 is installed; trying Visual Studio 2026 first...
+            cmake -G "Visual Studio 18 2026" -A x64 -B %BUILD_DIR% -S .
+            if not errorlevel 1 set "CMAKE_CONFIGURED=1"
+        )
+    )
+    if "!CMAKE_CONFIGURED!"=="0" (
+        echo Configuring with Visual Studio 17 2022...
+        if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
+        cmake -G "Visual Studio 17 2022" -A x64 -B %BUILD_DIR% -S .
+        if not errorlevel 1 (
+            set "CMAKE_CONFIGURED=1"
+        ) else (
+            echo Visual Studio 17 2022 configuration failed; attempting fallback to Visual Studio 18 2026...
+            if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
+            cmake -G "Visual Studio 18 2026" -A x64 -B %BUILD_DIR% -S .
+            if not errorlevel 1 set "CMAKE_CONFIGURED=1"
+        )
+    )
+) else if "!MSVC_VER!"=="2026" (
+    echo Configuring with Visual Studio 18 2026...
+    cmake -G "Visual Studio 18 2026" -A x64 -B %BUILD_DIR% -S .
+    if not errorlevel 1 (
+        set "CMAKE_CONFIGURED=1"
+    ) else (
+        echo Visual Studio 18 2026 configuration failed; attempting fallback to Visual Studio 17 2022...
+        if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
+        cmake -G "Visual Studio 17 2022" -A x64 -B %BUILD_DIR% -S .
+        if not errorlevel 1 set "CMAKE_CONFIGURED=1"
+    )
+) else (
+    :: Default: Try Visual Studio 2026 first; if 2022 isn't installed it'll try 2026
+    echo Detecting MSVC... Trying Visual Studio 18 2026 first...
+    cmake -G "Visual Studio 18 2026" -A x64 -B %BUILD_DIR% -S .
+    if not errorlevel 1 (
+        set "CMAKE_CONFIGURED=1"
+    ) else (
+        echo Visual Studio 18 2026 configuration failed; trying Visual Studio 17 2022...
+        if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
+        cmake -G "Visual Studio 17 2022" -A x64 -B %BUILD_DIR% -S .
+        if not errorlevel 1 set "CMAKE_CONFIGURED=1"
+    )
+)
+
+if "!CMAKE_CONFIGURED!"=="0" (
     echo CMake configuration failed.
     exit /b 1
 )

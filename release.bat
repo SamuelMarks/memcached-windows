@@ -179,7 +179,7 @@ if errorlevel 1 (
 
 echo [5/6] Running Test Suite...
 cd /d "%BUILD_DIR%"
-ctest -C Release --output-on-failure -E testapp
+ctest -C Release --output-on-failure -R "^(c_|py_|sizes)"
 if exist "%BUILD_DIR%\Release\c_test_runner.exe" (
     "%BUILD_DIR%\Release\c_test_runner.exe" all
 )

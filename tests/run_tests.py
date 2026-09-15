@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""
-run_tests.py - Discovers and runs all Python-based cross-platform memcached tests.
+"""Run all Python-based cross-platform memcached test suites.
+
+Discovers and executes all test suites matching test_*.py in this directory.
 """
 
 import os
@@ -9,6 +10,11 @@ import unittest
 
 
 def main():
+    """Discover and execute all memcached test modules.
+
+    :return: None
+    :rtype: None
+    """
     test_dir = os.path.dirname(os.path.abspath(__file__))
     sys.path.insert(0, test_dir)
 

@@ -399,7 +399,7 @@ jobs:
       - name: Run CTest Suite
         if: needs.prepare.outputs.run_tests == 'true'
         working-directory: build-repo/${{ env.BUILD_DIR }}
-        run: ctest -C ${{ env.BUILD_TYPE }} --output-on-failure -E testapp
+        run: ctest -C ${{ env.BUILD_TYPE }} --output-on-failure -R "^(c_|py_|sizes)"
         continue-on-error: true
 
       - name: E2E Smoke Testing
@@ -444,7 +444,8 @@ jobs:
               $version = $reader.ReadLine()
               Write-Host "Version response: $version"
 
-              $writer.WriteLine("set smokekey 0 0 5`r`nhello`r`n")
+              $writer.WriteLine("set smokekey 0 0 5")
+              $writer.WriteLine("hello")
               $setResp = $reader.ReadLine()
               Write-Host "Set response: $setResp"
 
@@ -508,7 +509,7 @@ jobs:
               Write-Host "Prepared versioned test runner: c_test_runner-$ver-win64.exe"
           }
 
-          Write-Host "Contents of $distDir:"
+          Write-Host "Contents of ${distDir}:"
           Get-ChildItem -Path $distDir | Format-Table Name, Length
 
       - name: Upload Artifacts
